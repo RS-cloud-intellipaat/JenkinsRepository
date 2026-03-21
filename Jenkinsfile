@@ -1,5 +1,5 @@
 pipeline {
-    agent { label 'jenkins-agent' }
+    agent any
 
     environment {
         APP_NAME       = "python-flask-demo"
@@ -11,6 +11,7 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -20,27 +21,53 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
+                echo "Building Docker image..."
                 docker build -t ${APP_NAME}:${IMAGE_TAG} .
                 docker tag ${APP_NAME}:${IMAGE_TAG} ${APP_NAME}:latest
                 '''
             }
         }
 
-        stage('Deploy on Agent (Docker Run)') {
+        stage('Stop Old Container') {
             steps {
                 sh '''
-                set +e
-                docker rm -f ${CONTAINER_NAME} >/dev/null 2>&1
-                set -e
+                echo "Stopping old container if exists..."
+                docker ps -q --filter "name=${CONTAINER_NAME}" | grep -q . && docker stop ${CONTAINER_NAME} || true
+                docker ps -aq --filter "name=${CONTAINER_NAME}" | grep -q . && docker rm ${CONTAINER_NAME} || true
+                '''
+            }
+        }
+
+        stage('Run New Container') {
+            steps {
+                sh '''
+                echo "Running new container..."
 
                 docker run -d \
                     --name ${CONTAINER_NAME} \
                     -p ${HOST_PORT}:${APP_PORT} \
+                    --restart unless-stopped \
                     ${APP_NAME}:latest
-
-                docker image prune -f || true
                 '''
             }
+        }
+
+        stage('Cleanup') {
+            steps {
+                sh '''
+                echo "Cleaning unused images..."
+                docker image prune -f
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Deployment Successful! Access app on port ${HOST_PORT}"
+        }
+        failure {
+            echo "❌ Deployment Failed. Check logs."
         }
     }
 }
